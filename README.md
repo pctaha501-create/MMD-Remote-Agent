@@ -1,24 +1,21 @@
 # MMD Remote Agent
 
-Windows console agent that securely connects this PC to the AI/MCP gateway at https://ssh.the-end.shop/.
+Windows Python runner for the existing AI/MCP gateway at https://ssh.the-end.shop/.
 
-## Connect
+## Run (no build, no EXE, no auto-updater)
 
-1. Open the website and generate a one-time 8-digit connection code.
-2. Run MMD-Remote-Agent.exe on Windows.
-3. Enter the code when the console asks for Connection Code.
-4. The agent pairs with the gateway and starts listening for MCP jobs.
+1. Open PowerShell **as Administrator**.
+2. Go to the folder containing this repository.
+3. Run:
 
-The device token is stored encrypted with Windows DPAPI in the current Windows user's configuration directory. After the first successful pairing, later launches reconnect automatically. If the token is revoked, the app asks for a fresh connection code.
+   ```powershell
+   python .\main.py
+   ```
 
-When replacing a previously paired device, disconnect/revoke the old device on the website before generating another code.
+Python 3.10+ is recommended. The runner uses only Python's standard library; no pip packages, compiler, Go build, or EXE are needed.
 
-## Command safety
+On first run, generate a one-time 8-digit connection code on https://ssh.the-end.shop/ and enter it when prompted. The device token is stored encrypted with Windows DPAPI in the current Windows user's AppData folder. Later runs reconnect automatically. If the token is revoked, the runner asks for a new code.
 
-Commands received over MCP are displayed in the local console. They run only after the local user types exactly YES. Rejected commands are reported to the gateway without execution.
+Commands received from MCP are displayed in this local console. They execute only if the local user types exactly `YES`; all other input rejects the command. Commands run through PowerShell. Run as Administrator because remote commands may require elevated Windows permissions.
 
-The executable requests Administrator privileges because some Windows management commands require elevation. The agent uses outbound HTTPS only; no inbound SSH server or open firewall port is required.
-
-## Build
-
-GitHub Actions builds the Windows executable and publishes it to GitHub Releases on pushes to main.
+The runner makes outbound HTTPS requests only. It does not open an inbound SSH server or firewall port. It does not download or install updates.
