@@ -1,0 +1,1 @@
+ALTER TABLE jobs ADD COLUMN owner_session_id TEXT;
