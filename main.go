@@ -3,17 +3,17 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -22,79 +22,93 @@ import (
 const gateway = "https://ssh.the-end.shop"
 
 type job struct { ID string `json:"id"`; Command string `json:"command"` }
-type pollResponse struct { Job *job `json:"job"` }
+type pollResponse struct { Job *job `json:"job"`; State string `json:"state"` }
 type resultPayload struct { ID string `json:"id"`; Output string `json:"output"`; ExitCode int `json:"exit_code"` }
 
-type agent struct { token string; client *http.Client }
+var httpClient = &http.Client{Timeout: 40*time.Second}
 
-func newAgent(token string) *agent {
-	return &agent{token: token, client: &http.Client{Timeout: 35*time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, MaxIdleConns: 2, IdleConnTimeout: 20*time.Second, TLSHandshakeTimeout: 10*time.Second}}}
+func configPath() (string,error) {
+	d,err:=os.UserConfigDir(); if err!=nil{return "",err}
+	p:=filepath.Join(d,"MMD-Remote-Agent"); if err=os.MkdirAll(p,0700);err!=nil{return "",err}
+	return filepath.Join(p,"device.dat"),nil
 }
-func (a *agent) request(ctx context.Context, path string, body any, out any) error {
+func loadToken()(string,error){
+	p,e:=configPath();if e!=nil{return "",e};b,e:=os.ReadFile(p);if e!=nil{return "",e}
+	plain,e:=unprotect(b);if e!=nil{return "",fmt.Errorf("cannot decrypt saved device credential: %w",e)}
+	return strings.TrimSpace(string(plain)),nil
+}
+func saveToken(token string)error{
+	p,e:=configPath();if e!=nil{return e};b,e:=protect([]byte(token));if e!=nil{return e}
+	tmp:=p+".tmp";if e=os.WriteFile(tmp,b,0600);e!=nil{return e};return os.Rename(tmp,p)
+}
+func request(ctx context.Context,path string,body any,token string,out any)error{
 	var rd io.Reader
-	if body != nil { b,err:=json.Marshal(body); if err!=nil{return err}; rd=bytes.NewReader(b) }
-	req,err:=http.NewRequestWithContext(ctx,http.MethodPost,gateway+path,rd); if err!=nil{return err}
-	req.Header.Set("Authorization","Bearer "+a.token); req.Header.Set("Accept","application/json")
-	if body!=nil { req.Header.Set("Content-Type","application/json") }
-	resp,err:=a.client.Do(req); if err!=nil{return err}; defer resp.Body.Close()
-	if resp.StatusCode<200||resp.StatusCode>=300 { b,_:=io.ReadAll(io.LimitReader(resp.Body,2048)); return fmt.Errorf("gateway returned HTTP %d: %s",resp.StatusCode,strings.TrimSpace(string(b))) }
-	if out!=nil { return json.NewDecoder(io.LimitReader(resp.Body,1<<20)).Decode(out) }
-	_,err=io.Copy(io.Discard,resp.Body); return err
+	if body!=nil { b,e:=json.Marshal(body);if e!=nil{return e};rd=bytes.NewReader(b) }
+	req,e:=http.NewRequestWithContext(ctx,http.MethodPost,gateway+path,rd);if e!=nil{return e}
+	req.Header.Set("Accept","application/json");if body!=nil{req.Header.Set("Content-Type","application/json")}
+	if token!=""{req.Header.Set("Authorization","Bearer "+token)}
+	resp,e:=httpClient.Do(req);if e!=nil{return e};defer resp.Body.Close()
+	data,_:=io.ReadAll(io.LimitReader(resp.Body,2<<20))
+	if resp.StatusCode<200||resp.StatusCode>=300{return fmt.Errorf("gateway HTTP %d: %s",resp.StatusCode,strings.TrimSpace(string(data)))}
+	if out!=nil{return json.Unmarshal(data,out)};return nil
 }
-func (a *agent) runCommand(command string) (string,int) {
-	ctx,cancel:=context.WithTimeout(context.Background(),30*time.Minute); defer cancel()
-	cmd:=exec.CommandContext(ctx,"powershell.exe","-NoLogo","-NoProfile","-NonInteractive","-Command",command)
-	var out bytes.Buffer; cmd.Stdout=&out; cmd.Stderr=&out
-	err:=cmd.Run()
-	if ctx.Err()!=nil { return out.String()+"\nCommand timed out or was cancelled.",124 }
-	if err==nil{return out.String(),0}
-	var ee *exec.ExitError; if errors.As(err,&ee){return out.String(),ee.ExitCode()}
-	return out.String()+"\n"+err.Error(),1
+func pair(ctx context.Context,code string)error{
+	var response struct{DeviceID string `json:"device_id"`;Token string `json:"device_token"`;Paired bool `json:"paired"`}
+	if e:=request(ctx,"/agent/pair",map[string]string{"code":code},"",&response);e!=nil{return e}
+	if !response.Paired||response.Token==""{return errors.New("gateway did not return a device credential")}
+	if e:=saveToken(response.Token);e!=nil{return e}
+	fmt.Println("Device paired successfully. Encrypted credential saved for this Windows user.")
+	return nil
 }
-func confirm(j job) bool {
+func runCommand(command string)(string,int){
 	fmt.Println("\n============================================================")
-	fmt.Println("درخواست اجرای دستور جدید (با دسترسی Administrator)")
-	fmt.Println("Job:",j.ID)
+	fmt.Println("درخواست اجرای فرمان روی این کامپیوتر:")
 	fmt.Println("------------------------------------------------------------")
-	fmt.Println(j.Command)
+	fmt.Println(command)
 	fmt.Println("------------------------------------------------------------")
-	fmt.Print("برای اجرا دقیقاً YES را وارد کن؛ هر چیز دیگری = رد: ")
-	line,_:=bufio.NewReader(os.Stdin).ReadString('\n')
-	return strings.EqualFold(strings.TrimSpace(line),"YES")
+	fmt.Print("برای اجازه اجرا دقیقاً YES را وارد کن: ")
+	var answer string
+	fmt.Scanln(&answer)
+	if strings.TrimSpace(answer)!="YES"{return "Execution rejected locally by the user.",125}
+	ctx,cancel:=context.WithTimeout(context.Background(),10*time.Minute);defer cancel()
+	cmd:=syscallCommand(ctx,command)
+	out,err:=cmd.CombinedOutput()
+	if ctx.Err()!=nil{return string(out)+"\nCommand timed out or was cancelled.",124}
+	if err==nil{return string(out),0}
+	var exit interface{ ExitCode() int };if errors.As(err,&exit){return string(out),exit.ExitCode()}
+	return string(out)+"\n"+err.Error(),1
 }
-func main() {
-	fmt.Println("MMD Remote Agent | Windows")
-	if !isAdmin() { fmt.Fprintln(os.Stderr,"ERROR: برنامه باید با دسترسی Administrator اجرا شود."); os.Exit(1) }
-	token:=strings.TrimSpace(os.Getenv("SSH_GATEWAY_TOKEN"))
-	if token=="" { fmt.Fprintln(os.Stderr,"SSH_GATEWAY_TOKEN is not set. Set the agent token in the environment, then reopen this app."); os.Exit(2) }
-	a:=newAgent(token)
-	ctx,stop:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM); defer stop()
-	fmt.Println("Administrator: OK")
+
+func main(){
+	pairCode:=flag.String("pair","","one-time pairing code shown on ssh.the-end.shop")
+	flag.Parse()
+	if !isAdmin(){fmt.Fprintln(os.Stderr,"ERROR: Run this app as Administrator.");os.Exit(1)}
+	ctx,stop:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer stop()
+	if *pairCode!="" {if len(*pairCode)!=8{fmt.Fprintln(os.Stderr,"Pairing code must contain 8 digits.");os.Exit(2)};if e:=pair(ctx,*pairCode);e!=nil{fmt.Fprintln(os.Stderr,"Pairing failed:",e);os.Exit(1)};return}
+	token,e:=loadToken();if e!=nil||token==""{fmt.Fprintln(os.Stderr,"This app is not paired yet.");fmt.Println("1) Open https://ssh.the-end.shop/");fmt.Println("2) Create a pairing code.");fmt.Println("3) Run: MMD-Remote-Agent.exe --pair 12345678");fmt.Println("Then start this app again.");os.Exit(2)}
+	fmt.Println("MMD Remote Agent | AI gateway connection")
 	fmt.Println("Gateway:",gateway)
-	fmt.Println("Connecting... (Ctrl+C to exit)")
+	fmt.Println("Local approval is required for every command. Press Ctrl+C to exit.")
 	backoff:=2*time.Second
-	for {
-		if ctx.Err()!=nil { fmt.Println("\nDisconnected."); return }
-		var p pollResponse
-		err:=a.request(ctx,"/agent/poll",nil,&p)
-		if err!=nil {
-			fmt.Fprintf(os.Stderr,"Connection error: %v | retry in %s\n",err,backoff)
-			select { case <-ctx.Done(): return; case <-time.After(backoff): }
-			if backoff<30*time.Second { backoff*=2; if backoff>30*time.Second {backoff=30*time.Second} }
-			continue
+	for ctx.Err()==nil{
+		var poll pollResponse
+		e=request(ctx,"/agent/poll",nil,token,&poll)
+		if e!=nil{
+			if strings.Contains(e.Error(),"HTTP 401")||strings.Contains(e.Error(),"HTTP 403"){fmt.Fprintln(os.Stderr,"Device disconnected or revoked. Pair again from the website.");break}
+			fmt.Fprintln(os.Stderr,"Connection:",e,"| retry:",backoff)
+			select{case <-ctx.Done():break;case <-time.After(backoff):}
+			if backoff<30*time.Second{backoff*=2};continue
 		}
 		backoff=2*time.Second
-		if p.Job==nil { select {case <-ctx.Done():return;case <-time.After(2*time.Second):}; continue }
-		var output string; var code int
-		if confirm(*p.Job) { fmt.Println("Executing..."); output,code=a.runCommand(p.Job.Command) } else { output="Execution rejected locally by the user."; code=125 }
-		payload:=resultPayload{ID:p.Job.ID,Output:output,ExitCode:code}
-		var sent bool
-		for attempt:=1;attempt<=5;attempt++ {
-			err=a.request(ctx,"/agent/result",payload,nil)
-			if err==nil {sent=true;break}
-			fmt.Fprintf(os.Stderr,"Result upload attempt %d failed: %v\n",attempt,err)
-			select {case <-ctx.Done():return;case <-time.After(time.Duration(attempt)*2*time.Second):}
+		if poll.Job==nil{select{case <-ctx.Done():case <-time.After(2*time.Second):};continue}
+		output,code:=runCommand(poll.Job.Command)
+		payload:=resultPayload{ID:poll.Job.ID,Output:output,ExitCode:code}
+		sent:=false
+		for attempt:=0;attempt<3&&ctx.Err()==nil;attempt++{
+			e=request(ctx,"/agent/result",payload,token,nil);if e==nil{sent=true;break}
+			fmt.Fprintln(os.Stderr,"Result upload failed:",e);select{case <-ctx.Done():case <-time.After(time.Duration(attempt+1)*2*time.Second):}
 		}
-		if sent {fmt.Printf("Result sent. Job=%s ExitCode=%d\n",p.Job.ID,code)} else {fmt.Fprintln(os.Stderr,"CRITICAL: result could not be uploaded; keep this window open and check gateway connectivity.")}
+		if sent{fmt.Println("Result delivered to AI gateway. Job:",poll.Job.ID)}else{fmt.Fprintln(os.Stderr,"CRITICAL: result could not be delivered; keep this window open and check connectivity.")}
 	}
+	fmt.Println("Agent stopped.")
 }
