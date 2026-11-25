@@ -1,31 +1,30 @@
 # MMD Remote Agent
 
-A minimal Windows console agent for the private MCP gateway at `https://ssh.the-end.shop`.
+اپ ویندوز برای ایجاد یک اتصال خروجی HTTPS بین ویندوز و درگاه هوش مصنوعی در https://ssh.the-end.shop/.
 
-## What it does
+## اتصال اولیه
+1. سایت https://ssh.the-end.shop/ را باز کنید.
+2. روی «ساخت کد اتصال» بزنید.
+3. اپ را با دسترسی Administrator اجرا کنید و کد یک‌بارمصرف را وارد کنید:
+   ```powershell
+   .\MMD-Remote-Agent.exe --pair 12345678
+   ```
+4. اپ را دوباره اجرا کنید. اعتبار دستگاه به‌صورت رمزگذاری‌شده با Windows DPAPI برای همان حساب ویندوز ذخیره می‌شود.
 
-- Runs as **Administrator** (Windows UAC prompt is embedded in the executable manifest).
-- Connects outbound over HTTPS; no inbound port, SSH server, tunnel, Electron, or extra runtime.
-- Polls the gateway for queued jobs and returns command output and exit code.
-- Requires local interactive approval: type exactly `YES` for each command.
-- Retries transient network failures with backoff and retries result uploads.
-- Uses only the Go standard library at runtime.
+کد فقط یک‌بار و به مدت سه دقیقه معتبر است. توکن دستگاه هرگز در فایل متنی ذخیره نمی‌شود.
 
-## Build
+## کنترل اتصال
+- Start در سایت: اجازه دریافت فرمان‌های جدید از AI.
+- Stop: توقف دریافت فرمان‌های جدید؛ فرمان در حال اجرا خاتمه اجباری نمی‌یابد.
+- Disconnect: حذف اعتبار دستگاه و لغو فرمان‌های در صف.
+- Ctrl+C در اپ: توقف agent.
+- هر فرمان پیش از اجرا روی ویندوز نمایش داده می‌شود و فقط با واردکردن دقیق `YES` اجرا خواهد شد.
 
-GitHub Actions builds the Windows x64 executable on every push to `main`. Download it from the workflow run's Artifacts section. Tag a commit with `v1.0.0` to publish a GitHub Release asset.
+## معماری
+- تنها ارتباط خروجی HTTPS به `ssh.the-end.shop`؛ بدون SSH Server، پورت ورودی، تونل یا نصب runtime جداگانه.
+- MCP موجود در مسیر `/mcp` حفظ شده است.
+- اجرای PowerShell فقط پس از تأیید محلی انجام می‌شود.
+- توکن دستگاه با Windows DPAPI رمزگذاری می‌شود.
 
-## Configure
-
-Set the agent token provided by the gateway administrator in the current PowerShell session, then launch the executable:
-
-```powershell
-$env:SSH_GATEWAY_TOKEN = Read-Host "Agent token"
-.\MMD-Remote-Agent.exe
-```
-
-Do not commit or share the token. The agent intentionally does not persist it in a plaintext config file.
-
-## Safety
-
-Administrator mode grants broad local authority, but remote commands are **not** executed automatically. Each command is displayed and requires a local `YES` confirmation. Only connect to a gateway you control. The agent does not implement arbitrary remote file access.
+## ساخت
+GitHub Actions فایل اجرایی Windows x64 را می‌سازد و در Release منتشر می‌کند.
