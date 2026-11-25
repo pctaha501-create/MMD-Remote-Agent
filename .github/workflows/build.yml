@@ -7,41 +7,53 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.x"
-          cache: true
+          cache: false
+
       - name: Embed administrator manifest
         shell: pwsh
         run: |
           go install github.com/akavel/rsrc@latest
           $rsrc = Join-Path (go env GOPATH) "bin/rsrc.exe"
           & $rsrc -manifest app.manifest -o rsrc_windows_amd64.syso
+
       - name: Format and test
         shell: pwsh
         run: |
-          gofmt -w .
+          gofmt -w *.go
           go test ./...
+
       - name: Build
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           go build -trimpath -ldflags="-s -w" -o dist/MMD-Remote-Agent.exe .
-      - name: Upload executable
-        uses: actions/upload-artifact@v4
+
+      - name: Publish latest build to GitHub Releases
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
         with:
-          name: MMD-Remote-Agent-windows-amd64
-          path: dist/MMD-Remote-Agent.exe
-          if-no-files-found: error
-      - name: Publish release asset
+          tag_name: build-${{ github.sha }}
+          target_commitish: main
+          name: MMD Remote Agent build ${{ github.sha }}
+          prerelease: true
+          files: dist/MMD-Remote-Agent.exe
+          fail_on_unmatched_files: true
+
+      - name: Publish versioned release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: MMD Remote Agent ${{ github.ref_name }}
           files: dist/MMD-Remote-Agent.exe
+          fail_on_unmatched_files: true
