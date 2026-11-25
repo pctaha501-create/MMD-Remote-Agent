@@ -91,8 +91,15 @@ def pair():
             except Exception as exc:
                 print("Warning: secure token storage failed:", exc)
             return token
-        print("Pairing failed:", data.get("error", f"HTTP {status}") if isinstance(data, dict) else f"HTTP {status}")
-        print("Generate a fresh connection code on the website and try again.")
+        print("Pairing failed: HTTP", status)
+        print("Gateway response:")
+        print(json.dumps(data, ensure_ascii=False, indent=2) if isinstance(data, (dict, list)) else str(data))
+        if status == 403:
+            print("\nThe gateway or its access layer denied this request (HTTP 403).")
+            print("This is not an invalid-code response. Do not generate more codes.")
+            print("The response above is needed to identify the server-side restriction.")
+            raise SystemExit(1)
+        print("Check the response above. If the code expired, generate a new one and retry.")
 
 def load_token():
     try:
