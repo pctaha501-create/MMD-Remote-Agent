@@ -1,36 +1,24 @@
 # MMD Remote Agent
 
-برنامه ویندوز برای اتصال امن خروجی به درگاه هوش مصنوعی:
-https://ssh.the-end.shop/
+Windows console agent that securely connects this PC to the AI/MCP gateway at https://ssh.the-end.shop/.
 
-## روش اتصال (ساختار پایدار قبلی)
+## Connect
 
-این نسخه از همان روش قبلی استفاده می‌کند:
-- احراز هویت با مقدار `SSH_GATEWAY_TOKEN` در متغیر محیطی ویندوز.
-- ارتباط خروجی HTTPS با مسیرهای `/agent/poll` و `/agent/result`.
-- دریافت فرمان‌های MCP از درگاه و اجرای آن‌ها فقط پس از تأیید محلی.
-- اجرای PowerShell با دسترسی Administrator.
+1. Open the website and generate a one-time 8-digit connection code.
+2. Run MMD-Remote-Agent.exe on Windows.
+3. Enter the code when the console asks for Connection Code.
+4. The agent pairs with the gateway and starts listening for MCP jobs.
 
-### اجرا
-در PowerShell، اگر متغیر توکن در همین نشست تنظیم شده باشد:
+The device token is stored encrypted with Windows DPAPI in the current Windows user's configuration directory. After the first successful pairing, later launches reconnect automatically. If the token is revoked, the app asks for a fresh connection code.
 
-```powershell
-.\MMD-Remote-Agent.exe
-```
+When replacing a previously paired device, disconnect/revoke the old device on the website before generating another code.
 
-اگر برنامه پیام `SSH_GATEWAY_TOKEN is not set` نشان داد، ابتدا متغیر محیطی را در همان پنجره PowerShell تنظیم کنید، سپس برنامه را از همان پنجره اجرا کنید. توکن را در فایل یا مخزن GitHub قرار ندهید.
+## Command safety
 
-### تأیید فرمان‌ها
-هر فرمان دریافتی روی صفحه نمایش داده می‌شود. فقط با واردکردن دقیق `YES` اجرا خواهد شد؛ هر ورودی دیگر فرمان را رد می‌کند.
+Commands received over MCP are displayed in the local console. They run only after the local user types exactly YES. Rejected commands are reported to the gateway without execution.
 
-### توقف
-برای قطع اتصال، `Ctrl+C` را بزنید.
+The executable requests Administrator privileges because some Windows management commands require elevation. The agent uses outbound HTTPS only; no inbound SSH server or open firewall port is required.
 
-## معماری
-- تنها اتصال خروجی HTTPS به `ssh.the-end.shop`.
-- نیازی به نصب SSH Server، بازکردن پورت ورودی یا نصب runtime جداگانه نیست.
-- مسیر MCP موجود در `/mcp` حفظ شده است.
-- درگاه از اپ قدیمی با توکن و اپ جفت‌شدهٔ جدید پشتیبانی می‌کند.
+## Build
 
-## ساخت
-GitHub Actions فایل اجرایی Windows x64 را می‌سازد و در Releases منتشر می‌کند.
+GitHub Actions builds the Windows executable and publishes it to GitHub Releases on pushes to main.
