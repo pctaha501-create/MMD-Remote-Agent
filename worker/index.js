@@ -93,7 +93,11 @@ export default {async fetch(request,env){
  if(attempt&&now-attempt.window_started_at<60&&attempt.attempts>=10)return reply({error:"تعداد تلاش‌ها زیاد است؛ یک دقیقه دیگر دوباره امتحان کنید."},429);
  if(attempt&&now-attempt.window_started_at<60)await env.DB.prepare("UPDATE agent_pair_attempts SET attempts=attempts+1 WHERE ip_hash=?").bind(ipHash).run();
  else await env.DB.prepare("INSERT INTO agent_pair_attempts(ip_hash,window_started_at,attempts) VALUES(?,?,1) ON CONFLICT(ip_hash) DO UPDATE SET window_started_at=excluded.window_started_at,attempts=1").bind(ipHash,now).run();
- const paired=await env.DB.prepare("UPDATE agent_pair_requests SET session_id=? WHERE code_hash=? AND session_id IS NULL AND used_at IS NULL AND expires_at>? RETURNING code_hash").bind(s.id,await hash(b.code),now).first();
+ const codeHash=await hash(b.code);
+const prior=await env.DB.prepare("SELECT session_id FROM agent_pair_requests WHERE code_hash=? AND used_at IS NULL AND expires_at>?").bind(codeHash,now).first();
+if(prior?.session_id===s.id)return reply({ok:true,message:"این کد قبلاً برای همین نشست تأیید شده است."});
+if(prior?.session_id)return reply({error:"این کد قبلاً در نشست دیگری استفاده شده است."},409);
+const paired=await env.DB.prepare("UPDATE agent_pair_requests SET session_id=? WHERE code_hash=? AND session_id IS NULL AND used_at IS NULL AND expires_at>? RETURNING code_hash").bind(s.id,codeHash,now).first();
  if(!paired)return reply({error:"کد نامعتبر است یا منقضی شده است."},401);
  return reply({ok:true,message:"کد تأیید شد؛ برنامه ویندوز اتصال را تکمیل می‌کند."});
  }
