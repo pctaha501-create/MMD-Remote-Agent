@@ -2,6 +2,7 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -75,31 +76,40 @@ def http_json(path: str, method="POST", payload=None, token=None, timeout=25):
         return exc.code, detail
 
 def pair():
-    while True:
-        code = input("Enter Connection Code: ").strip()
-        if len(code) != 8 or not code.isascii() or not code.isdigit():
-            print("Enter the 8-digit code shown on the website.")
-            continue
-        print("Connecting to gateway...")
-        status, data = http_json("/agent/pair", payload={"code": code})
+    code = f"{secrets.randbelow(100_000_000):08d}"
+    secret = secrets.token_urlsafe(32)
+    print("\nA one-time pairing code has been generated on this computer:")
+    print("\n  " + code + "\n")
+    print("Open https://ssh.the-end.shop/ and enter this code there.")
+    print("The code expires in 3 minutes. Waiting for website confirmation...")
+
+    status, data = http_json("/agent/pair/init", payload={"code": code, "secret": secret})
+    if status != 200 or not isinstance(data, dict) or data.get("ok") is not True:
+        print("Could not register pairing code: HTTP", status)
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        raise SystemExit(1)
+
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        status, data = http_json("/agent/pair/complete", payload={"code": code, "secret": secret})
         token = data.get("device_token") if isinstance(data, dict) else None
-        if status == 200 and data.get("paired") is True and token:
-            try:
-                APP_DIR.mkdir(parents=True, exist_ok=True)
-                TOKEN_FILE.write_bytes(dpapi_protect(token.encode("utf-8")))
-                print("Connection saved securely.")
-            except Exception as exc:
-                print("Warning: secure token storage failed:", exc)
+        if status == 200 and isinstance(data, dict) and data.get("paired") is True and token:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            TOKEN_FILE.write_bytes(dpapi_protect(token.encode("utf-8")))
+            print("Connection saved securely with Windows DPAPI.")
             return token
-        print("Pairing failed: HTTP", status)
-        print("Gateway response:")
-        print(json.dumps(data, ensure_ascii=False, indent=2) if isinstance(data, (dict, list)) else str(data))
-        if status == 403:
-            print("\nThe gateway or its access layer denied this request (HTTP 403).")
-            print("This is not an invalid-code response. Do not generate more codes.")
-            print("The response above is needed to identify the server-side restriction.")
+        if status == 202:
+            time.sleep(2)
+            continue
+        if status in (401, 404, 410):
+            print("Pairing failed or expired: HTTP", status)
+            print(json.dumps(data, ensure_ascii=False, indent=2))
             raise SystemExit(1)
-        print("Check the response above. If the code expired, generate a new one and retry.")
+        print("Pairing check failed: HTTP", status, data)
+        time.sleep(3)
+
+    print("Pairing code expired. Run the app again to generate a new code.")
+    raise SystemExit(1)
 
 def load_token():
     try:
