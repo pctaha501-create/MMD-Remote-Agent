@@ -144,13 +144,13 @@ def run_powershell(command: str):
         return f"Execution error: {exc}", 1
 
 def approve(job):
-    print("\n\033[38;5;75m  ╭" + "─" * 66 + "╮\033[0m")
-    print("\033[1;38;5;221m  │  SECURITY REVIEW  /  APPROVAL REQUIRED\033[0m")
+    print("\n\033[96m" + "─" * 68 + "\033[0m")
+    print("\033[1;93m  MCP COMMAND — APPROVAL REQUIRED\033[0m")
     print("\033[90m  Job ID: " + str(job.get("id", "unknown")) + "\033[0m")
-    print("\033[38;5;75m  ╰" + "─" * 66 + "╯\033[0m")
+    print("\033[96m" + "─" * 68 + "\033[0m")
     for line in textwrap.wrap(str(job.get("command", "")), width=64, break_long_words=True, replace_whitespace=False):
         print("  " + line)
-    print("\033[38;5;75m  ╰" + "─" * 66 + "╯\033[0m")
+    print("\033[96m" + "─" * 68 + "\033[0m")
     print("\033[93m  Type uppercase YES to approve. Any other input rejects.\033[0m")
     return input("\033[1;97m  Approval > \033[0m").strip() == "YES"
 
@@ -173,37 +173,22 @@ def main():
         return 1
 
     try:
-        kernel = ctypes.windll.kernel32
-        kernel.SetConsoleTitleW("MMD Remote Agent  |  Secure MCP Gateway")
-        handle = kernel.GetStdHandle(-11)
-        mode = wt.DWORD()
-        if kernel.GetConsoleMode(handle, ctypes.byref(mode)):
-            kernel.SetConsoleMode(handle, mode.value | 0x0004)
-        os.system("")  # Enable ANSI processing in modern Windows terminals.
+        ctypes.windll.kernel32.SetConsoleTitleW("MMD Remote Agent | Secure MCP")
     except Exception:
         pass
-
-    C = {"blue":"\033[38;5;75m", "cyan":"\033[38;5;81m", "white":"\033[1;97m", "muted":"\033[38;5;245m", "green":"\033[38;5;78m", "gold":"\033[38;5;221m", "reset":"\033[0m"}
-    os.system("cls")
-    print(C["blue"] + "  ╭──────────────────────────────────────────────────────────────────────╮")
-    print("  │" + C["white"] + "                    M M D   R E M O T E   A G E N T                   " + C["blue"] + "│")
-    print("  │" + C["muted"] + "                     SECURE  MCP  •  WINDOWS  NODE                    " + C["blue"] + "│")
-    print("  ╰──────────────────────────────────────────────────────────────────────╯" + C["reset"])
-    print()
-    print("  " + C["cyan"] + "CONNECTION" + C["reset"] + "   " + C["muted"] + "──────────────────────────────────────────────────────" + C["reset"])
+    print("\033[96m╔" + "═" * 58 + "╗\033[0m")
+    print("\033[1;97m║" + " " * 20 + "MMD REMOTE AGENT" + " " * 22 + "║\033[0m")
+    print("\033[96m╚" + "═" * 58 + "╝\033[0m")
     token = load_token()
     if token:
-        print("  " + C["green"] + "●" + C["reset"] + "  Saved encrypted device credential found")
+        print("Saved secure connection found.")
     else:
         token = pair()
 
-    print("  " + C["green"] + "● ONLINE" + C["reset"] + "   " + C["muted"] + "Gateway  " + C["reset"] + GATEWAY)
-    print("  " + C["green"] + "● READY" + C["reset"] + "    " + C["muted"] + "Approval " + C["reset"] + "Website dashboard  /  Local PowerShell")
-    print()
-    print("  " + C["cyan"] + "ACTIVITY" + C["reset"] + "     " + C["muted"] + "──────────────────────────────────────────────────────" + C["reset"])
-    print("  " + C["green"] + "◉" + C["reset"] + "  " + C["white"] + "Listening for secure MCP commands" + C["reset"])
-    print("  " + C["muted"] + "   Press Ctrl+C to disconnect safely" + C["reset"])
-    print()
+    print("\033[92m  ● Secure connection ready\033[0m")
+    print("\033[90m  Gateway : " + GATEWAY + "\033[0m")
+    print("\033[90m  Mode    : Website or local approval required\033[0m")
+    print("\033[96m  Waiting for MCP commands · Ctrl+C to exit\033[0m")
     backoff = 2
 
     while True:
