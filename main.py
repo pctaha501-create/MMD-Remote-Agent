@@ -99,11 +99,11 @@ def panel(title,lines,tone="cyan",width=72):
 def banner():
     print();panel("MMD  /  REMOTE AGENT",["SECURE MCP GATEWAY  ·  WINDOWS COMMAND BRIDGE",GATEWAY,"Commands are never executed without explicit approval."],"cyan");print()
 
-def pair():
+def pair(previous_token=None):
     code=f"{secrets.randbelow(100_000_000):08d}";secret=secrets.token_urlsafe(32)
     panel("PAIR THIS WINDOWS DEVICE",["Open https://ssh.the-end.shop/ in your browser.","Enter the 8-digit code below. It expires in 3 minutes."],"blue")
     print();print(paint("                 YOUR ONE-TIME PAIRING CODE","muted",True));print(paint("                    ┌──────────────────┐","cyan"));print(paint("                    │    "+code+"    │","white",True));print(paint("                    └──────────────────┘","cyan"));print()
-    status,data=http_json("/agent/pair/init",payload={"code":code,"secret":secret})
+    status,data=http_json("/agent/pair/init",payload={"code":code,"secret":secret},token=previous_token)
     if status!=200 or not isinstance(data,dict) or data.get("ok") is not True:
         panel("PAIRING COULD NOT START",[f"Gateway response: HTTP {status}",json.dumps(data,ensure_ascii=False)],"red");raise SystemExit(1)
     deadline=time.monotonic()+180
@@ -178,13 +178,11 @@ def main(argv=None):
         if not ctypes.windll.shell32.IsUserAnAdmin():print(paint("ERROR: Run this terminal as Administrator.","red",True));return 1
     except Exception:print("ERROR: Could not verify Administrator privileges.");return 1
     enable_terminal();banner();token=load_token()
-    if args.force_pair and token:
-        print(paint("  Re-pair requested. Revoking the previous device session...","yellow"))
-        try:status,data=http_json("/agent/unpair",token=token)
-        except Exception as exc:print(paint(f"  Gateway unreachable; saved credential kept: {exc}","red"));return 1
-        if status not in (200,401):print(paint(f"  Re-pair refused: HTTP {status} {data}. Saved credential kept.","red"));return 1
-        TOKEN_FILE.unlink(missing_ok=True);print(paint("  Previous device session revoked.","green"));token=None
-    if token:print(paint("  ✓ Saved secure connection loaded.","green",True))
+    if args.force_pair:
+        print(paint("  Re-pair requested. Starting a fresh one-time pairing...","yellow"))
+        try:token=pair(previous_token=token)
+        except Exception as exc:print(paint(f"  Re-pair failed; saved credential preserved: {exc}","red"));return 1
+    elif token:print(paint("  ✓ Saved secure connection loaded.","green",True))
     else:token=pair()
     print();panel("AGENT ONLINE",["Gateway  : "+GATEWAY,"Security : Website approval OR local PowerShell approval","Status   : Waiting for MCP commands","Exit     : Ctrl+C"],"green")
     print(paint("  Tip: run  python main.py --pair  to generate a new pairing code.","muted"));print();backoff=2
