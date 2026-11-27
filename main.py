@@ -6,6 +6,7 @@ import secrets
 import subprocess
 import sys
 import time
+import textwrap
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -143,13 +144,21 @@ def run_powershell(command: str):
         return f"Execution error: {exc}", 1
 
 def approve(job):
-    print("\n" + "=" * 72)
-    print("NEW MCP COMMAND — LOCAL APPROVAL REQUIRED")
-    print("Job ID:", job.get("id", "unknown"))
-    print("-" * 72)
-    print(job.get("command", ""))
-    print("-" * 72)
-    return input("Type YES to execute this command; anything else rejects it: ").strip() == "YES"
+    print("\n\033[96m" + "─" * 68 + "\033[0m")
+    print("\033[1;93m  MCP COMMAND — APPROVAL REQUIRED\033[0m")
+    print("\033[90m  Job ID: " + str(job.get("id", "unknown")) + "\033[0m")
+    print("\033[96m" + "─" * 68 + "\033[0m")
+    for line in textwrap.wrap(str(job.get("command", "")), width=64, break_long_words=True, replace_whitespace=False):
+        print("  " + line)
+    print("\033[96m" + "─" * 68 + "\033[0m")
+    print("\033[93m  Type uppercase YES to approve. Any other input rejects.\033[0m")
+    return input("\033[1;97m  Approval > \033[0m").strip() == "YES"
+
+def resolve_approval(job, token, decision):
+    status, data = http_json("/agent/approval", payload={"id": job.get("id"), "decision": decision}, token=token)
+    if status != 200 or not isinstance(data, dict):
+        raise RuntimeError(f"Approval decision failed: HTTP {status} {data}")
+    return data.get("approval_status")
 
 def main():
     if os.name != "nt":
@@ -163,17 +172,23 @@ def main():
         print("ERROR: Could not verify Administrator privileges.")
         return 1
 
-    print("=" * 60)
-    print("                 MMD REMOTE AGENT")
-    print("=" * 60)
+    try:
+        ctypes.windll.kernel32.SetConsoleTitleW("MMD Remote Agent | Secure MCP")
+    except Exception:
+        pass
+    print("\033[96m╔" + "═" * 58 + "╗\033[0m")
+    print("\033[1;97m║" + " " * 20 + "MMD REMOTE AGENT" + " " * 22 + "║\033[0m")
+    print("\033[96m╚" + "═" * 58 + "╝\033[0m")
     token = load_token()
     if token:
         print("Saved secure connection found.")
     else:
         token = pair()
 
-    print("Gateway:", GATEWAY)
-    print("Waiting for MCP commands... (Ctrl+C to exit)")
+    print("\033[92m  ● Secure connection ready\033[0m")
+    print("\033[90m  Gateway : " + GATEWAY + "\033[0m")
+    print("\033[90m  Mode    : Website or local approval required\033[0m")
+    print("\033[96m  Waiting for MCP commands · Ctrl+C to exit\033[0m")
     backoff = 2
 
     while True:
@@ -200,11 +215,15 @@ def main():
                 time.sleep(1)
                 continue
 
-            if approve(job):
-                print("Executing...")
+            approval = job.get("approval_status") or "pending"
+            if approval == "pending":
+                approval = resolve_approval(job, token, "approve" if approve(job) else "reject")
+            if approval == "approved":
+                print("\\n\033[92m  ✓ Approved — executing in PowerShell...\033[0m")
                 output, exit_code = run_powershell(command)
             else:
-                output, exit_code = "Execution rejected locally by the user.", 125
+                print("\\n\033[91m  ✕ Rejected — command was not executed.\033[0m")
+                output, exit_code = "Execution rejected by approval policy.", 125
 
             payload = {"id": job_id, "output": output, "exit_code": exit_code}
             sent = False
@@ -216,14 +235,15 @@ def main():
                 print(f"Result upload attempt {attempt} failed: HTTP {result_status}")
                 time.sleep(attempt * 2)
             if sent:
-                print(f"Result sent. Job={job_id} ExitCode={exit_code}")
+                print(f"\033[92m  ✓ Result delivered · Job={job_id} · ExitCode={exit_code}\033[0m")
             else:
                 print("CRITICAL: Result could not be uploaded. Keep this window open and check the connection.")
         except KeyboardInterrupt:
             print("\nDisconnected.")
             return 0
         except Exception as exc:
-            print(f"Connection error: {exc} | retrying in {backoff}s", file=sys.stderr)
+            print(f"\033[91m  ! Connection error: {exc}\033[0m", file=sys.stderr)
+            print(f"\033[90m    Retrying in {backoff}s...\033[0m", file=sys.stderr)
             time.sleep(backoff)
             backoff = min(backoff * 2, 30)
 

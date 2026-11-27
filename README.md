@@ -1,21 +1,22 @@
 # MMD Remote Agent
 
-Windows Python runner for the existing AI/MCP gateway at https://ssh.the-end.shop/.
+Windows agent for the existing MCP gateway: https://ssh.the-end.shop/
 
-## Run (no build, no EXE, no auto-updater)
+## Run
+Open PowerShell as Administrator in this folder and run:
 
-1. Open PowerShell **as Administrator**.
-2. Go to the folder containing this repository.
-3. Run:
+    python main.py
 
-   ```powershell
-   python .\main.py
-   ```
+Python 3.10+ is recommended. The agent uses only Python's standard library. No SSH server, inbound firewall rule, or additional Python package is required.
 
-Python 3.10+ is recommended. The runner uses only Python's standard library; no pip packages, compiler, Go build, or EXE are needed.
+On first launch, the agent prints an 8-digit one-time pairing code. Enter it on https://ssh.the-end.shop/ within 3 minutes. The device token is stored using Windows DPAPI.
 
-On first run, the Windows app generates an 8-digit, one-time pairing code and displays it in the terminal. Open https://ssh.the-end.shop/ and enter that code on the website. The code expires after 3 minutes. The app also uses a separate random verifier that is never shown in the browser; after the website claims the code, the app completes pairing and receives its device token. The token is stored encrypted with Windows DPAPI in the current Windows user's AppData folder. Later runs reconnect automatically. If the token is revoked, the runner asks for a new code.
+## Command approval
+Every MCP command requires one explicit approval. Approve or reject it either:
+- in the website dashboard, or
+- in the local PowerShell window by typing uppercase YES (any other input rejects).
 
-Commands received from MCP are displayed in this local console. They execute only if the local user types exactly `YES`; all other input rejects the command. Commands run through PowerShell. Run as Administrator because remote commands may require elevated Windows permissions.
+The gateway stores the first decision atomically. If the website has already approved a command, the agent receives the approved state and does not ask for a second approval. A rejected command is never executed. The agent also refuses to report execution results for a command without a recorded approval.
 
-The runner makes outbound HTTPS requests only. It does not open an inbound SSH server or firewall port. It does not download or install updates. The website must be accessed over HTTPS so the browser session cookie and pairing flow remain protected.
+## Security
+Commands run through PowerShell under the current Windows account. Review the full command before approving it. The agent makes outbound HTTPS requests only.
