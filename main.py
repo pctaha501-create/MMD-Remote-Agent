@@ -2,6 +2,7 @@ import argparse
 import ctypes
 import ctypes.wintypes as wt
 import json
+import msvcrt
 import os
 import secrets
 import subprocess
@@ -154,12 +155,37 @@ def run_powershell(command: str):
 
 def approve(job):
     command=str(job.get("command",""));panel("MCP COMMAND  /  LOCAL APPROVAL REQUIRED",["Job ID: "+str(job.get("id","unknown")),"Review every line before approving."],"yellow")
-    print(paint("  COMMAND","cyan",True));print(paint("  ┌"+"─"*68+"┐","cyan"))
+    print(paint("  COMMAND","cyan",True));print(paint("  "+"─"*68,"cyan"))
     for line in textwrap.wrap(command,width=66,break_long_words=True,replace_whitespace=False) or [""]:print("  │ "+line.ljust(66)+" │")
-    print(paint("  └"+"─"*68+"┘","cyan"));print(paint("  Type YES (uppercase) to execute. Any other input rejects it.","yellow",True))
-    try:answer=input(paint("  Approval  > ","white",True)).strip()
-    except EOFError:answer=""
-    return answer=="YES"
+    print(paint("  "+"─"*68,"cyan"))
+    # Safe arrow-key selector: NO is selected by default.
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print(paint("  Type YES (uppercase) to execute. Any other input rejects it.","yellow",True))
+        try: answer=input(paint("  Approval  > ","white",True)).strip()
+        except EOFError: answer=""
+        return answer=="YES"
+    choices=["YES  - Execute command","NO   - Reject command"]
+    selected=1
+    print(paint("  Use ↑/↓ to choose, Enter to confirm, Esc to reject.","muted"))
+    while True:
+        for i,label in enumerate(choices):
+            marker="❯" if i==selected else " "
+            tone="green" if i==0 else "red"
+            sys.stdout.write("\r\x1b[2K"+paint("  "+marker+" "+label,tone,i==selected)+"\n")
+        sys.stdout.flush()
+        sys.stdout.write("\x1b[2A")
+        key=msvcrt.getwch()
+        if key in ("\x00","\xe0"):
+            scan=msvcrt.getwch()
+            if scan=="H": selected=(selected-1)%2
+            elif scan=="P": selected=(selected+1)%2
+        elif key=="\x1b":
+            sys.stdout.write("\x1b[2B")
+            print(paint("  Rejected (Esc).","red",True));return False
+        elif key=="\r":
+            sys.stdout.write("\x1b[2B")
+            print(paint("  Selected: "+("YES" if selected==0 else "NO"),"green" if selected==0 else "red",True))
+            return selected==0
 
 def resolve_approval(job, token, decision):
     status, data = http_json("/agent/approval", payload={"id": job.get("id"), "decision": decision}, token=token)
