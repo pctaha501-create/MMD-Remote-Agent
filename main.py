@@ -227,7 +227,7 @@ def main(argv=None):
     print(paint("  Tip: run  python main.py --pair  to generate a new pairing code.","muted"));print();backoff=2
     while True:
         try:
-            status,data=http_json("/agent/poll",token=token,timeout=30)
+            status,data=http_json("/agent/poll",payload={"os":"windows","version":"2.2.0-windows"},token=token,timeout=30)
             if status==401:
                 print(paint("\n  ! Saved connection is no longer valid. Starting secure re-pairing...","yellow",True));TOKEN_FILE.unlink(missing_ok=True);token=pair();backoff=2;continue
             if status!=200:raise RuntimeError(f"Gateway HTTP {status}: {data}")
