@@ -11,6 +11,12 @@ Python 3.10+ is recommended. The agent uses only Python's standard library. No S
 
 On first launch, the agent prints an 8-digit one-time pairing code. Enter it on https://ssh.the-end.shop/ within 3 minutes. The device token is stored using Windows DPAPI.
 
+On later launches, the saved secure connection is reused automatically; a new code is not expected each time. To revoke the current device session and generate a fresh 8-digit code, stop the running agent and run:
+
+    python main.py --pair
+
+The website dashboard keeps its existing appearance and lets you enter the new code. The old device is retired without deleting command history. Use `--no-color` if your terminal does not support ANSI colors.
+
 ## Command approval
 Every MCP command requires one explicit approval. Approve or reject it either:
 - in the website dashboard, or
