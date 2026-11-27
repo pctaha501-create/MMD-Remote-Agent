@@ -66,17 +66,30 @@ def http_json(path: str, method="POST", payload=None, token=None, timeout=25):
     if token:
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(GATEWAY + path, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read(1024 * 1024)
-            return response.status, json.loads(raw.decode("utf-8")) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read(4096).decode("utf-8", "replace")
+    backoff = 2
+    attempt = 0
+    while True:
+        attempt += 1
         try:
-            detail = json.loads(raw)
-        except Exception:
-            detail = {"error": raw or str(exc)}
-        return exc.code, detail
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read(1024 * 1024)
+                return response.status, json.loads(raw.decode("utf-8")) if raw else {}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read(4096).decode("utf-8", "replace")
+            if exc.code in (408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530):
+                print(f"\n[!] Gateway temporarily returned HTTP {exc.code}; retrying attempt {attempt} in {backoff}s...", flush=True)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+                continue
+            try:
+                detail = json.loads(raw)
+            except Exception:
+                detail = {"error": raw or str(exc)}
+            return exc.code, detail
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, json.JSONDecodeError) as exc:
+            print(f"\n[!] Gateway connection/response error: {exc}; retrying attempt {attempt} in {backoff}s...", flush=True)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30)
 
 
 COLOR_ENABLED=True
@@ -98,7 +111,7 @@ def panel(title,lines,tone="cyan",width=72):
         for chunk in textwrap.wrap(str(line),width=inner) or [""]:print("  │ "+chunk.ljust(inner)+" │")
     print(paint("  ╰"+"─"*(width-2)+"╯",tone))
 def banner():
-    print();panel("MMD  /  REMOTE AGENT",["SECURE MCP GATEWAY  ·  WINDOWS COMMAND BRIDGE",GATEWAY,"Commands are never executed without explicit approval."],"cyan");print()
+    print();panel("MMD  /  REMOTE AGENT",["SECURE MCP GATEWAY  ·  WINDOWS COMMAND BRIDGE",GATEWAY,"Commands require approval unless a limited auto-approval quota is explicitly enabled in the dashboard."],"cyan");print()
 
 def pair(previous_token=None):
     code=f"{secrets.randbelow(100_000_000):08d}";secret=secrets.token_urlsafe(32)
@@ -210,7 +223,7 @@ def main(argv=None):
         except Exception as exc:print(paint(f"  Re-pair failed; saved credential preserved: {exc}","red"));return 1
     elif token:print(paint("  ✓ Saved secure connection loaded.","green",True))
     else:token=pair()
-    print();panel("AGENT ONLINE",["Gateway  : "+GATEWAY,"Security : Website approval OR local PowerShell approval","Status   : Waiting for MCP commands","Exit     : Ctrl+C"],"green")
+    print();panel("AGENT ONLINE",["Gateway  : "+GATEWAY,"Security : Local PowerShell approval OR explicit dashboard quota","Status   : Waiting for MCP commands","Exit     : Ctrl+C"],"green")
     print(paint("  Tip: run  python main.py --pair  to generate a new pairing code.","muted"));print();backoff=2
     while True:
         try:
@@ -227,10 +240,14 @@ def main(argv=None):
             if approval=="approved":print(paint("\n  ✓ Approved — executing in PowerShell...","green",True));output,exit_code=run_powershell(command)
             else:print(paint("\n  ✕ Rejected — command was not executed.","red",True));output,exit_code="Execution rejected by approval policy.",125
             payload={"id":job_id,"output":output,"exit_code":exit_code};sent=False
-            for attempt in range(1,6):
+            attempt=0;result_backoff=2
+            while True:
+                attempt+=1
                 rs,result=http_json("/agent/result",payload=payload,token=token,timeout=25)
-                if rs==200 and result.get("ok") is True:sent=True;break
-                print(paint(f"  ! Result upload attempt {attempt} failed: HTTP {rs}","yellow"));time.sleep(attempt*2)
+                if rs==200 and isinstance(result,dict) and result.get("ok") is True:sent=True;break
+                print(paint(f"  ! Result upload attempt {attempt} failed: HTTP {rs}; retrying in {result_backoff}s", "yellow"),flush=True)
+                if rs in (400,401,403,404,409,410,422):break
+                time.sleep(result_backoff);result_backoff=min(result_backoff*2,30)
             if sent:
                 print(paint(f"  ✓ Result delivered  ·  Job {job_id}  ·  Exit code {exit_code}","green" if exit_code==0 else "yellow",True))
                 if output.strip():print(paint("  ── COMMAND OUTPUT ──","muted"));print(output.rstrip());print(paint("  ───────────────────","muted"))
