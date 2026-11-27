@@ -1,3 +1,4 @@
+import argparse
 import ctypes
 import ctypes.wintypes as wt
 import json
@@ -76,52 +77,60 @@ def http_json(path: str, method="POST", payload=None, token=None, timeout=25):
             detail = {"error": raw or str(exc)}
         return exc.code, detail
 
+
+COLOR_ENABLED=True
+COLORS={"cyan":"\033[96m","blue":"\033[94m","green":"\033[92m","yellow":"\033[93m","red":"\033[91m","white":"\033[97m","muted":"\033[90m","bold":"\033[1m","reset":"\033[0m"}
+def paint(value,tone="white",bold=False):
+    if not COLOR_ENABLED:return str(value)
+    return COLORS.get(tone,COLORS["white"])+(COLORS["bold"] if bold else "")+str(value)+COLORS["reset"]
+def enable_terminal():
+    if os.name=="nt":
+        try:
+            h=ctypes.windll.kernel32.GetStdHandle(-11);mode=wt.DWORD()
+            if ctypes.windll.kernel32.GetConsoleMode(h,ctypes.byref(mode)):ctypes.windll.kernel32.SetConsoleMode(h,mode.value|4)
+            ctypes.windll.kernel32.SetConsoleTitleW("MMD Remote Agent | Secure MCP Gateway")
+        except Exception:pass
+def panel(title,lines,tone="cyan",width=72):
+    inner=width-4
+    print(paint("  ╭"+"─"*(width-2)+"╮",tone));print(paint("  │ "+title[:inner].ljust(inner)+" │",tone,True));print(paint("  ├"+"─"*(width-2)+"┤",tone))
+    for line in lines:
+        for chunk in textwrap.wrap(str(line),width=inner) or [""]:print("  │ "+chunk.ljust(inner)+" │")
+    print(paint("  ╰"+"─"*(width-2)+"╯",tone))
+def banner():
+    print();panel("MMD  /  REMOTE AGENT",["SECURE MCP GATEWAY  ·  WINDOWS COMMAND BRIDGE",GATEWAY,"Commands are never executed without explicit approval."],"cyan");print()
+
 def pair():
-    code = f"{secrets.randbelow(100_000_000):08d}"
-    secret = secrets.token_urlsafe(32)
-    print("\nA one-time pairing code has been generated on this computer:")
-    print("\n  " + code + "\n")
-    print("Open https://ssh.the-end.shop/ and enter this code there.")
-    print("The code expires in 3 minutes. Waiting for website confirmation...")
-
-    status, data = http_json("/agent/pair/init", payload={"code": code, "secret": secret})
-    if status != 200 or not isinstance(data, dict) or data.get("ok") is not True:
-        print("Could not register pairing code: HTTP", status)
-        print(json.dumps(data, ensure_ascii=False, indent=2))
-        raise SystemExit(1)
-
-    deadline = time.monotonic() + 180
-    while time.monotonic() < deadline:
-        status, data = http_json("/agent/pair/complete", payload={"code": code, "secret": secret})
-        token = data.get("device_token") if isinstance(data, dict) else None
-        if status == 200 and isinstance(data, dict) and data.get("paired") is True and token:
-            APP_DIR.mkdir(parents=True, exist_ok=True)
-            TOKEN_FILE.write_bytes(dpapi_protect(token.encode("utf-8")))
-            print("Connection saved securely with Windows DPAPI.")
-            return token
-        if status == 202:
-            time.sleep(2)
-            continue
-        if status in (401, 404, 410):
-            print("Pairing failed or expired: HTTP", status)
-            print(json.dumps(data, ensure_ascii=False, indent=2))
-            raise SystemExit(1)
-        print("Pairing check failed: HTTP", status, data)
-        time.sleep(3)
-
-    print("Pairing code expired. Run the app again to generate a new code.")
-    raise SystemExit(1)
+    code=f"{secrets.randbelow(100_000_000):08d}";secret=secrets.token_urlsafe(32)
+    panel("PAIR THIS WINDOWS DEVICE",["Open https://ssh.the-end.shop/ in your browser.","Enter the 8-digit code below. It expires in 3 minutes."],"blue")
+    print();print(paint("                 YOUR ONE-TIME PAIRING CODE","muted",True));print(paint("                    ┌──────────────────┐","cyan"));print(paint("                    │    "+code+"    │","white",True));print(paint("                    └──────────────────┘","cyan"));print()
+    status,data=http_json("/agent/pair/init",payload={"code":code,"secret":secret})
+    if status!=200 or not isinstance(data,dict) or data.get("ok") is not True:
+        panel("PAIRING COULD NOT START",[f"Gateway response: HTTP {status}",json.dumps(data,ensure_ascii=False)],"red");raise SystemExit(1)
+    deadline=time.monotonic()+180
+    while time.monotonic()<deadline:
+        status,data=http_json("/agent/pair/complete",payload={"code":code,"secret":secret});token=data.get("device_token") if isinstance(data,dict) else None
+        if status==200 and isinstance(data,dict) and data.get("paired") is True and token:
+            APP_DIR.mkdir(parents=True,exist_ok=True);TOKEN_FILE.write_bytes(dpapi_protect(token.encode("utf-8")))
+            print(paint("  ✓ Device paired. Credential protected with Windows DPAPI.","green",True));return token
+        if status==202:time.sleep(2);continue
+        if status in (401,404,409,410):
+            panel("PAIRING FAILED",[f"Gateway response: HTTP {status}",json.dumps(data,ensure_ascii=False)],"red");raise SystemExit(1)
+        print(paint(f"  ! Pairing check returned HTTP {status}; retrying...","yellow"));time.sleep(3)
+    print(paint("  ✕ Pairing code expired. Run with --pair to try again.","red",True));raise SystemExit(1)
 
 def load_token():
     try:
         return dpapi_unprotect(TOKEN_FILE.read_bytes()).decode("utf-8").strip()
     except FileNotFoundError:
         return None
-    except Exception:
+    except Exception as exc:
         try:
-            TOKEN_FILE.unlink(missing_ok=True)
-        except Exception:
-            pass
+            if TOKEN_FILE.exists():
+                backup = TOKEN_FILE.with_name("device.dat.corrupt." + time.strftime("%Y%m%d-%H%M%S"))
+                TOKEN_FILE.replace(backup)
+                print(f"\n[!] Saved credential could not be decrypted; preserved backup: {backup}")
+        except Exception as backup_error:
+            print(f"\n[!] Saved credential could not be read or backed up: {backup_error}")
         return None
 
 def run_powershell(command: str):
@@ -144,15 +153,13 @@ def run_powershell(command: str):
         return f"Execution error: {exc}", 1
 
 def approve(job):
-    print("\n\033[96m" + "─" * 68 + "\033[0m")
-    print("\033[1;93m  MCP COMMAND — APPROVAL REQUIRED\033[0m")
-    print("\033[90m  Job ID: " + str(job.get("id", "unknown")) + "\033[0m")
-    print("\033[96m" + "─" * 68 + "\033[0m")
-    for line in textwrap.wrap(str(job.get("command", "")), width=64, break_long_words=True, replace_whitespace=False):
-        print("  " + line)
-    print("\033[96m" + "─" * 68 + "\033[0m")
-    print("\033[93m  Type uppercase YES to approve. Any other input rejects.\033[0m")
-    return input("\033[1;97m  Approval > \033[0m").strip() == "YES"
+    command=str(job.get("command",""));panel("MCP COMMAND  /  LOCAL APPROVAL REQUIRED",["Job ID: "+str(job.get("id","unknown")),"Review every line before approving."],"yellow")
+    print(paint("  COMMAND","cyan",True));print(paint("  ┌"+"─"*68+"┐","cyan"))
+    for line in textwrap.wrap(command,width=66,break_long_words=True,replace_whitespace=False) or [""]:print("  │ "+line.ljust(66)+" │")
+    print(paint("  └"+"─"*68+"┘","cyan"));print(paint("  Type YES (uppercase) to execute. Any other input rejects it.","yellow",True))
+    try:answer=input(paint("  Approval  > ","white",True)).strip()
+    except EOFError:answer=""
+    return answer=="YES"
 
 def resolve_approval(job, token, decision):
     status, data = http_json("/agent/approval", payload={"id": job.get("id"), "decision": decision}, token=token)
@@ -160,92 +167,52 @@ def resolve_approval(job, token, decision):
         raise RuntimeError(f"Approval decision failed: HTTP {status} {data}")
     return data.get("approval_status")
 
-def main():
-    if os.name != "nt":
-        print("This runner currently supports Windows only.")
-        return 1
+def main(argv=None):
+    global COLOR_ENABLED
+    parser=argparse.ArgumentParser(description="MMD Remote Agent - secure Windows MCP command bridge")
+    parser.add_argument("--pair","--re-pair",dest="force_pair",action="store_true",help="revoke saved device and show a fresh 8-digit pairing code")
+    parser.add_argument("--no-color",action="store_true",help="disable terminal colors")
+    args=parser.parse_args(argv);COLOR_ENABLED=not args.no_color
+    if os.name!="nt":print("This runner currently supports Windows only.");return 1
     try:
-        if not ctypes.windll.shell32.IsUserAnAdmin():
-            print("ERROR: Run this terminal as Administrator.")
-            return 1
-    except Exception:
-        print("ERROR: Could not verify Administrator privileges.")
-        return 1
-
-    try:
-        ctypes.windll.kernel32.SetConsoleTitleW("MMD Remote Agent | Secure MCP")
-    except Exception:
-        pass
-    print("\033[96m╔" + "═" * 58 + "╗\033[0m")
-    print("\033[1;97m║" + " " * 20 + "MMD REMOTE AGENT" + " " * 22 + "║\033[0m")
-    print("\033[96m╚" + "═" * 58 + "╝\033[0m")
-    token = load_token()
-    if token:
-        print("Saved secure connection found.")
-    else:
-        token = pair()
-
-    print("\033[92m  ● Secure connection ready\033[0m")
-    print("\033[90m  Gateway : " + GATEWAY + "\033[0m")
-    print("\033[90m  Mode    : Website or local approval required\033[0m")
-    print("\033[96m  Waiting for MCP commands · Ctrl+C to exit\033[0m")
-    backoff = 2
-
+        if not ctypes.windll.shell32.IsUserAnAdmin():print(paint("ERROR: Run this terminal as Administrator.","red",True));return 1
+    except Exception:print("ERROR: Could not verify Administrator privileges.");return 1
+    enable_terminal();banner();token=load_token()
+    if args.force_pair and token:
+        print(paint("  Re-pair requested. Revoking the previous device session...","yellow"))
+        try:status,data=http_json("/agent/unpair",token=token)
+        except Exception as exc:print(paint(f"  Gateway unreachable; saved credential kept: {exc}","red"));return 1
+        if status not in (200,401):print(paint(f"  Re-pair refused: HTTP {status} {data}. Saved credential kept.","red"));return 1
+        TOKEN_FILE.unlink(missing_ok=True);print(paint("  Previous device session revoked.","green"));token=None
+    if token:print(paint("  ✓ Saved secure connection loaded.","green",True))
+    else:token=pair()
+    print();panel("AGENT ONLINE",["Gateway  : "+GATEWAY,"Security : Website approval OR local PowerShell approval","Status   : Waiting for MCP commands","Exit     : Ctrl+C"],"green")
+    print(paint("  Tip: run  python main.py --pair  to generate a new pairing code.","muted"));print();backoff=2
     while True:
         try:
-            status, data = http_json("/agent/poll", token=token, timeout=30)
-            if status == 401:
-                print("\nSaved connection is no longer valid. Pair again.")
-                TOKEN_FILE.unlink(missing_ok=True)
-                token = pair()
-                backoff = 2
-                continue
-            if status != 200:
-                raise RuntimeError(f"Gateway HTTP {status}: {data}")
-            backoff = 2
-            job = data.get("job") if isinstance(data, dict) else None
-            if not job:
-                time.sleep(POLL_SECONDS)
-                continue
-
-            command = job.get("command")
-            job_id = job.get("id")
-            if not isinstance(command, str) or not command.strip() or not isinstance(job_id, str):
-                print("Ignoring malformed job received from gateway.")
-                time.sleep(1)
-                continue
-
-            approval = job.get("approval_status") or "pending"
-            if approval == "pending":
-                approval = resolve_approval(job, token, "approve" if approve(job) else "reject")
-            if approval == "approved":
-                print("\\n\033[92m  ✓ Approved — executing in PowerShell...\033[0m")
-                output, exit_code = run_powershell(command)
-            else:
-                print("\\n\033[91m  ✕ Rejected — command was not executed.\033[0m")
-                output, exit_code = "Execution rejected by approval policy.", 125
-
-            payload = {"id": job_id, "output": output, "exit_code": exit_code}
-            sent = False
-            for attempt in range(1, 6):
-                result_status, result = http_json("/agent/result", payload=payload, token=token, timeout=25)
-                if result_status == 200 and result.get("ok") is True:
-                    sent = True
-                    break
-                print(f"Result upload attempt {attempt} failed: HTTP {result_status}")
-                time.sleep(attempt * 2)
+            status,data=http_json("/agent/poll",token=token,timeout=30)
+            if status==401:
+                print(paint("\n  ! Saved connection is no longer valid. Starting secure re-pairing...","yellow",True));TOKEN_FILE.unlink(missing_ok=True);token=pair();backoff=2;continue
+            if status!=200:raise RuntimeError(f"Gateway HTTP {status}: {data}")
+            backoff=2;job=data.get("job") if isinstance(data,dict) else None
+            if not job:time.sleep(POLL_SECONDS);continue
+            command=job.get("command");job_id=job.get("id")
+            if not isinstance(command,str) or not command.strip() or not isinstance(job_id,str):print(paint("  ! Ignoring malformed job received from gateway.","yellow"));time.sleep(1);continue
+            approval=job.get("approval_status") or "pending"
+            if approval=="pending":approval=resolve_approval(job,token,"approve" if approve(job) else "reject")
+            if approval=="approved":print(paint("\n  ✓ Approved — executing in PowerShell...","green",True));output,exit_code=run_powershell(command)
+            else:print(paint("\n  ✕ Rejected — command was not executed.","red",True));output,exit_code="Execution rejected by approval policy.",125
+            payload={"id":job_id,"output":output,"exit_code":exit_code};sent=False
+            for attempt in range(1,6):
+                rs,result=http_json("/agent/result",payload=payload,token=token,timeout=25)
+                if rs==200 and result.get("ok") is True:sent=True;break
+                print(paint(f"  ! Result upload attempt {attempt} failed: HTTP {rs}","yellow"));time.sleep(attempt*2)
             if sent:
-                print(f"\033[92m  ✓ Result delivered · Job={job_id} · ExitCode={exit_code}\033[0m")
-            else:
-                print("CRITICAL: Result could not be uploaded. Keep this window open and check the connection.")
-        except KeyboardInterrupt:
-            print("\nDisconnected.")
-            return 0
-        except Exception as exc:
-            print(f"\033[91m  ! Connection error: {exc}\033[0m", file=sys.stderr)
-            print(f"\033[90m    Retrying in {backoff}s...\033[0m", file=sys.stderr)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 30)
+                print(paint(f"  ✓ Result delivered  ·  Job {job_id}  ·  Exit code {exit_code}","green" if exit_code==0 else "yellow",True))
+                if output.strip():print(paint("  ── COMMAND OUTPUT ──","muted"));print(output.rstrip());print(paint("  ───────────────────","muted"))
+            else:print(paint("  CRITICAL: Result could not be uploaded. Keep this window open and check the connection.","red",True))
+        except KeyboardInterrupt:print(paint("\n  ● Agent disconnected safely.","muted"));return 0
+        except Exception as exc:print(paint(f"  ! Connection error: {exc}","red"),file=sys.stderr);print(paint(f"    Retrying in {backoff}s...","muted"),file=sys.stderr);time.sleep(backoff);backoff=min(backoff*2,30)
 
 if __name__ == "__main__":
     raise SystemExit(main())
